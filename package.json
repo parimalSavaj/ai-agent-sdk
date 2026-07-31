@@ -6,8 +6,8 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "dev": "ts-node src/index.ts",
     "start": "node dist/index.js",
+    "example:basic": "node dist/examples/basic-agent.js",
     "clean": "rm -rf dist",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -19,5 +19,9 @@
     "@types/node": "^26.1.2",
     "ts-node": "^10.9.2",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "openai": "^7.2.0",
+    "zod": "^4.4.3"
   }
 }
