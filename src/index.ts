@@ -32,6 +32,7 @@ export {
   systemMessage,
   userMessage,
   assistantTextMessage,
+  assistantToolCallMessage,
   toolResultMessage,
 } from "./core/message.js";
 

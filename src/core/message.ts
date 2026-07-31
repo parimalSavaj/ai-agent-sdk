@@ -77,6 +77,22 @@ export function assistantTextMessage(text: string): AssistantMessage {
   return { role: "assistant", content: [{ type: "text", text }] };
 }
 
+/**
+ * Build an AssistantMessage that carries one or more tool-call requests
+ * (and optionally some leading text) exactly as the model returned them.
+ * This is appended to history before executing tools so the model sees its
+ * own prior requests when we re-call it with the tool results.
+ */
+export function assistantToolCallMessage(
+  toolCalls: ToolCallPart[],
+  text = "",
+): AssistantMessage {
+  const content: AssistantContentPart[] = [];
+  if (text) content.push({ type: "text", text });
+  content.push(...toolCalls);
+  return { role: "assistant", content };
+}
+
 export function toolResultMessage(
   toolCallId: string,
   toolName: string,

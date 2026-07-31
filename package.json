@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "example:basic": "node dist/examples/basic-agent.js",
+    "example:basic": "node --env-file=.env dist/examples/basic-agent.js",
+    "example:weather": "node --env-file=.env dist/examples/weather-agent.js",
     "clean": "rm -rf dist",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

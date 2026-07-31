@@ -77,31 +77,35 @@ export class Tool<TSchema extends ZodTypeAny = ZodTypeAny> {
   }
 
   // ── Zod → JSON schema conversion ───────────────────────────────────────────
-  // A minimal converter that handles the subset of Zod types typically used
-  // for tool parameters. Static so it can be tested independently.
+  // Zod v4 changed _def: the discriminator is now _def.type ("object",
+  // "string", …) instead of the old _def.typeName ("ZodObject", "ZodString", …).
+  // Shape values are plain schema objects (not a factory function).
+  // Arrays use _def.element (not _def.type). Enums use _def.entries (not _def.values).
+  // Static so it can be tested independently.
 
   static toJsonSchema(schema: ZodTypeAny): JsonSchema {
     const def = schema._def as unknown as Record<string, unknown>;
-    const typeName = def["typeName"] as string;
+    const typeName = def["type"] as string;
 
     switch (typeName) {
-      case "ZodString":
+      case "string":
         return { type: "string" };
-      case "ZodNumber":
+      case "number":
+      case "int":
         return { type: "number" };
-      case "ZodBoolean":
+      case "boolean":
         return { type: "boolean" };
-      case "ZodNull":
+      case "null":
         return { type: "null" };
-      case "ZodArray": {
-        const items = Tool.toJsonSchema(def["type"] as ZodTypeAny);
+      case "array": {
+        const items = Tool.toJsonSchema(def["element"] as ZodTypeAny);
         return { type: "array", items };
       }
-      case "ZodOptional":
-      case "ZodNullable":
+      case "optional":
+      case "nullable":
         return Tool.toJsonSchema(def["innerType"] as ZodTypeAny);
-      case "ZodObject": {
-        const shape = (def["shape"] as () => Record<string, ZodTypeAny>)();
+      case "object": {
+        const shape = def["shape"] as Record<string, ZodTypeAny>;
         const properties: Record<string, JsonSchema> = {};
         const required: string[] = [];
 
@@ -110,7 +114,7 @@ export class Tool<TSchema extends ZodTypeAny = ZodTypeAny> {
             string,
             unknown
           >;
-          const isOptional = fieldDef["typeName"] === "ZodOptional";
+          const isOptional = fieldDef["type"] === "optional";
           properties[key] = Tool.toJsonSchema(value as ZodTypeAny);
           // Copy description from .describe() if present
           const description = fieldDef["description"] as string | undefined;
@@ -122,14 +126,17 @@ export class Tool<TSchema extends ZodTypeAny = ZodTypeAny> {
         if (required.length > 0) result.required = required;
         return result;
       }
-      case "ZodEnum": {
-        const values = def["values"] as unknown[];
-        return { type: "string", enum: values };
+      case "enum": {
+        // Zod v4 stores enum values as { key: value } entries object
+        const entries = def["entries"] as Record<string, unknown>;
+        return { type: "string", enum: Object.values(entries) };
       }
-      case "ZodLiteral": {
-        const value = def["value"];
-        const t = typeof value as JsonSchemaType;
-        return { type: t, enum: [value] };
+      case "literal": {
+        // Zod v4 stores literal values as an array
+        const values = def["values"] as unknown[];
+        const v = values[0];
+        const t = typeof v as JsonSchemaType;
+        return { type: t, enum: values };
       }
       default:
         // Fallback — unknown Zod type, emit an empty schema
