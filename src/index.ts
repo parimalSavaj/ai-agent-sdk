@@ -9,7 +9,7 @@
 export { createAgent } from "./core/agent.js";
 export { defineTool } from "./core/tool.js";
 export { model, registerProvider } from "./core/model.js";
-export { run } from "./core/runner.js";
+export { run, runStream } from "./core/runner.js";
 
 // ── Types — agent ─────────────────────────────────────────────────────────────
 export type { Agent, AgentConfig } from "./core/agent.js";
@@ -53,7 +53,12 @@ export type {
 } from "./core/provider.js";
 
 // ── Types — runner ────────────────────────────────────────────────────────────
-export type { RunOptions, RunResult, RunEvent } from "./core/runner.js";
+export type {
+  RunOptions,
+  RunResult,
+  RunEvent,
+  RunStreamEvent,
+} from "./core/runner.js";
 
 // ── Types — model() ───────────────────────────────────────────────────────────
 export type { KnownProvider, ModelSpec } from "./core/model.js";

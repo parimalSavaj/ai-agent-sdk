@@ -11,6 +11,7 @@
     "example:weather": "node --env-file=.env dist/examples/weather-agent.js",
     "example:local": "node --env-file=.env dist/examples/local-model.js",
     "example:test-providers": "node --env-file=.env dist/examples/test-providers.js",
+    "example:stream": "node --env-file=.env dist/examples/streaming-chat.js",
     "clean": "rm -rf dist",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
