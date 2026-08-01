@@ -9,6 +9,8 @@
     "start": "node dist/index.js",
     "example:basic": "node --env-file=.env dist/examples/basic-agent.js",
     "example:weather": "node --env-file=.env dist/examples/weather-agent.js",
+    "example:local": "node --env-file=.env dist/examples/local-model.js",
+    "example:test-providers": "node --env-file=.env dist/examples/test-providers.js",
     "clean": "rm -rf dist",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -22,6 +24,7 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
     "openai": "^7.2.0",
     "zod": "^4.4.3"
   }
