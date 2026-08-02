@@ -23,6 +23,13 @@ export {
 } from "./core/output.js";
 export { defineGuardrail, GuardrailError } from "./core/guardrail.js";
 export { defineHandoff, HandoffError } from "./core/handoff.js";
+export {
+  RetryError,
+  TimeoutError,
+  callWithRetry,
+  callWithTimeout,
+  generateWithReliability,
+} from "./core/reliability.js";
 
 // ── Types — agent ─────────────────────────────────────────────────────────────
 export type { Agent, AgentConfig } from "./core/agent.js";

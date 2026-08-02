@@ -16,6 +16,7 @@
     "example:structured": "node --env-file=.env dist/examples/structured-output.js",
     "example:guardrails": "node --env-file=.env dist/examples/guardrails.js",
     "example:handoffs": "node --env-file=.env dist/examples/handoffs.js",
+    "example:reliability": "node --env-file=.env dist/examples/reliability.js",
     "clean": "rm -rf dist",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

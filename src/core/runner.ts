@@ -45,6 +45,7 @@ import {
   isHandoffToolCall,
   HandoffError,
 } from "./handoff.js";
+import { generateWithReliability } from "./reliability.js";
 
 // ── RunOptions ────────────────────────────────────────────────────────────────
 
@@ -63,6 +64,20 @@ export type RunOptions<TSchema extends ZodTypeAny = ZodTypeAny> = {
    * Prevents infinite delegation loops. Default: 3
    */
   maxHandoffs?: number;
+  /**
+   * Maximum number of attempts per LLM call (1 = no retry). Default: 1
+   * On failure, waits `retryDelay` ms before each retry (doubles each time).
+   */
+  maxRetries?: number;
+  /**
+   * Base delay in ms between retries. Doubles each attempt. Default: 1000
+   */
+  retryDelay?: number;
+  /**
+   * Per-call timeout in ms. If the model doesn't respond within this time,
+   * the call is cancelled and retried (or fails). Default: no timeout
+   */
+  callTimeout?: number;
 };
 
 // ── RunEvent ──────────────────────────────────────────────────────────────────
@@ -153,6 +168,18 @@ export type RunEvent =
       toAgent: string;
       finalOutput: string;
       timestamp: string;
+    }
+  | {
+      /** Fired before each retry attempt after a failed LLM call */
+      type: "llm-call-retry";
+      agentName: string;
+      turn: number;
+      attempt: number;
+      error: string;
+      delayMs: number;
+      /** true if this retry will use the fallback model */
+      usingFallback: boolean;
+      timestamp: string;
     };
 
 // ── RunResult ─────────────────────────────────────────────────────────────────
@@ -205,6 +232,9 @@ export async function run<TSchema extends ZodTypeAny = ZodTypeAny>(
     output: outputSchema,
     maxOutputRetries = 2,
     maxHandoffs = 3,
+    maxRetries = 1,
+    retryDelay = 1000,
+    callTimeout,
   } = options;
 
   // When structured output is requested, append the JSON schema instruction
@@ -288,13 +318,41 @@ export async function run<TSchema extends ZodTypeAny = ZodTypeAny>(
       emitter,
     );
 
-    const result = await activeAgent.model.generate({
+    const generateInput = {
       messages,
       tools: activeAllTools.length > 0 ? activeAllTools : undefined,
       temperature,
       maxTokens,
       signal,
-    });
+    };
+
+    const { result, usedFallback } = await generateWithReliability(
+      activeAgent.model,
+      generateInput,
+      {
+        maxAttempts: maxRetries,
+        retryDelay,
+        callTimeout,
+        fallbackProvider: activeAgent.fallbackModel,
+        onRetry: (attempt, error) => {
+          const isLastAttempt = attempt >= maxRetries;
+          dispatch(
+            {
+              type: "llm-call-retry",
+              agentName: activeAgent.name,
+              turn: turns,
+              attempt,
+              error: error.message,
+              delayMs: Math.min(retryDelay * Math.pow(2, attempt - 1), 30_000),
+              usingFallback: isLastAttempt && !!activeAgent.fallbackModel,
+              timestamp: new Date().toISOString(),
+            },
+            onEvent,
+            emitter,
+          );
+        },
+      },
+    );
 
     dispatch(
       {

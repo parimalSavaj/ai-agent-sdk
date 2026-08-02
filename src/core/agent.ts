@@ -17,7 +17,6 @@ import type {
   OutputGuardrail,
 } from "./guardrail.js";
 import type { Handoff } from "./handoff.js";
-
 // ── AgentConfig ───────────────────────────────────────────────────────────────
 
 export type AgentConfig = {
@@ -35,6 +34,19 @@ export type AgentConfig = {
   model: ModelProvider;
   /** Tools available to this agent. Empty by default. */
   tools?: Tool[];
+  /**
+   * Fallback model provider — used when all retry attempts on the primary
+   * model fail. One attempt is made on the fallback with no further retries.
+   *
+   * @example
+   * ```ts
+   * const agent = createAgent({
+   *   model: model("openai/gpt-4o-mini"),
+   *   fallbackModel: model("openrouter/anthropic/claude-3-haiku"),
+   * });
+   * ```
+   */
+  fallbackModel?: ModelProvider;
   /**
    * Handoffs this agent can perform — each one is surfaced to the model as
    * a tool. When the model calls it, the runner switches to the target agent
@@ -65,6 +77,7 @@ export class Agent {
   readonly name: string;
   readonly instructions: string;
   readonly model: ModelProvider;
+  readonly fallbackModel?: ModelProvider;
   readonly tools: Tool[];
   readonly handoffs: Handoff[];
   readonly inputGuardrails: InputGuardrail[];
@@ -75,6 +88,7 @@ export class Agent {
     this.name = config.name;
     this.instructions = config.instructions;
     this.model = config.model;
+    this.fallbackModel = config.fallbackModel;
     this.tools = config.tools ?? [];
     this.handoffs = config.handoffs ?? [];
     this.inputGuardrails = config.inputGuardrails ?? [];
