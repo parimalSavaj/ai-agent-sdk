@@ -12,6 +12,7 @@
     "example:local": "node --env-file=.env dist/examples/local-model.js",
     "example:test-providers": "node --env-file=.env dist/examples/test-providers.js",
     "example:stream": "node --env-file=.env dist/examples/streaming-chat.js",
+    "example:memory": "node --env-file=.env dist/examples/memory-chat.js",
     "clean": "rm -rf dist",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

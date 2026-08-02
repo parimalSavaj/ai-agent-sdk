@@ -10,6 +10,12 @@ export { createAgent } from "./core/agent.js";
 export { defineTool } from "./core/tool.js";
 export { model, registerProvider } from "./core/model.js";
 export { run, runStream } from "./core/runner.js";
+export { AgentEventEmitter } from "./events/emitter.js";
+export {
+  createThread,
+  getDefaultStore,
+  InMemoryThreadStore,
+} from "./core/thread.js";
 
 // ── Types — agent ─────────────────────────────────────────────────────────────
 export type { Agent, AgentConfig } from "./core/agent.js";
@@ -60,5 +66,12 @@ export type {
   RunStreamEvent,
 } from "./core/runner.js";
 
+// ── Types — events ────────────────────────────────────────────────────────────
+export type { EventMap } from "./events/emitter.js";
+
 // ── Types — model() ───────────────────────────────────────────────────────────
 export type { KnownProvider, ModelSpec } from "./core/model.js";
+
+// ── Types — thread ────────────────────────────────────────────────────────────
+export type { ThreadStore } from "./core/thread.js";
+export { Thread } from "./core/thread.js";
