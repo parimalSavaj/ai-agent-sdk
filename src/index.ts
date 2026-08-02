@@ -16,6 +16,11 @@ export {
   getDefaultStore,
   InMemoryThreadStore,
 } from "./core/thread.js";
+export {
+  defineOutput,
+  OutputSchema,
+  StructuredOutputError,
+} from "./core/output.js";
 
 // ── Types — agent ─────────────────────────────────────────────────────────────
 export type { Agent, AgentConfig } from "./core/agent.js";

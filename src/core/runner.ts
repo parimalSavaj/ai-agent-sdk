@@ -8,11 +8,10 @@
  *   - `RunOptions`, `RunResult`, `RunStreamEvent` use `type` — plain data.
  *   - `RunEvent` is a discriminated union of lifecycle variants.
  *
- * Phase 5: every RunEvent now carries a timestamp (ISO string) and the
- * agent name so observers have full context without needing to close over
- * anything. An optional `emitter` field in RunOptions enables subscription-
- * style observation alongside the existing inline `onEvent` callback.
- * Both are fired for every event — they compose, not replace each other.
+ * Phase 7: structured output — when `options.output` is provided the runner
+ * appends a JSON schema instruction to the system prompt, validates the final
+ * response against the Zod schema, and retries up to `maxOutputRetries` times
+ * if the model returns invalid JSON or the wrong shape.
  */
 
 import type { Agent } from "./agent.js";
@@ -27,59 +26,25 @@ import {
 import type { GenerateResult, ToolCall } from "./provider.js";
 import type { AgentEventEmitter } from "../events/emitter.js";
 import type { Thread } from "./thread.js";
+import type { OutputSchema } from "./output.js";
+import { StructuredOutputError } from "./output.js";
+import { z, type ZodTypeAny } from "zod";
 
 // ── RunOptions ────────────────────────────────────────────────────────────────
 
-export type RunOptions = {
-  /**
-   * Maximum number of model calls (including tool-call turns).
-   * Prevents infinite loops when a model keeps requesting tools.
-   * Default: 10
-   */
+export type RunOptions<TSchema extends ZodTypeAny = ZodTypeAny> = {
   maxTurns?: number;
-  /** Sampling temperature override (0–2). Undefined = provider default. */
   temperature?: number;
-  /** Max tokens override. */
   maxTokens?: number;
-  /** AbortSignal for cancellation. */
   signal?: AbortSignal;
-  /**
-   * Inline lifecycle callback — fired for every event.
-   * Composes with `emitter` when both are provided.
-   */
   onEvent?: (event: RunEvent) => void;
-  /**
-   * Thread for conversation memory. When provided, the runner loads existing
-   * messages from the thread before calling the model, and saves new messages
-   * back after the run. Pass the same thread across multiple run() calls to
-   * maintain a persistent conversation.
-   *
-   * @example
-   * ```ts
-   * const thread = createThread();
-   * await run(agent, "My name is Alex", { thread });
-   * const result = await run(agent, "What is my name?", { thread });
-   * ```
-   */
   thread?: Thread;
-  /**
-   * EventEmitter instance — fired for every event in addition to onEvent.
-   * Enables multi-subscriber, reusable observability.
-   *
-   * @example
-   * ```ts
-   * const emitter = new AgentEventEmitter();
-   * emitter.on("tool-call-end", (e) => metrics.record(e));
-   * await run(agent, input, { emitter });
-   * ```
-   */
   emitter?: AgentEventEmitter;
+  output?: OutputSchema<TSchema>;
+  maxOutputRetries?: number;
 };
 
-// ── RunEvent — discriminated union of every lifecycle event ───────────────────
-// Every variant now carries:
-//   - timestamp : ISO-8601 string of when the event was fired
-//   - agentName : name of the agent that produced it
+// ── RunEvent ──────────────────────────────────────────────────────────────────
 
 export type RunEvent =
   | {
@@ -94,7 +59,6 @@ export type RunEvent =
       agentName: string;
       turn: number;
       result: GenerateResult;
-      /** Wall-clock ms the model call took */
       durationMs: number;
       timestamp: string;
     }
@@ -116,27 +80,43 @@ export type RunEvent =
       timestamp: string;
     }
   | {
+      /** Fired when structured output passes validation */
+      type: "output-valid";
+      agentName: string;
+      attempt: number;
+      output: unknown;
+      timestamp: string;
+    }
+  | {
+      /** Fired when structured output fails validation — will retry */
+      type: "output-invalid";
+      agentName: string;
+      attempt: number;
+      rawOutput: string;
+      /** Zod validation issues */
+      issues: Array<{ path: string; message: string }>;
+      timestamp: string;
+    }
+  | {
       type: "run-complete";
       agentName: string;
       finalOutput: string;
       turns: number;
-      /** Total wall-clock ms for the entire run */
       totalDurationMs: number;
       timestamp: string;
     };
 
 // ── RunResult ─────────────────────────────────────────────────────────────────
 
-export type RunResult = {
-  /** The final plain-text answer from the model */
+export type RunResult<TOutput = unknown> = {
   finalOutput: string;
-  /** Full conversation history including the final assistant message */
   messages: Message[];
-  /** Number of model calls made */
   turns: number;
+  /** Typed structured output — present when options.output validation succeeded */
+  output?: TOutput;
 };
 
-// ── Internal helper — fire both onEvent and emitter ──────────────────────────
+// ── Internal helper ───────────────────────────────────────────────────────────
 
 function dispatch(
   event: RunEvent,
@@ -158,11 +138,11 @@ function dispatch(
  * console.log(result.finalOutput);
  * ```
  */
-export async function run(
+export async function run<TSchema extends ZodTypeAny = ZodTypeAny>(
   agent: Agent,
   input: string,
-  options: RunOptions = {},
-): Promise<RunResult> {
+  options: RunOptions<TSchema> = {},
+): Promise<RunResult<z.infer<TSchema>>> {
   const {
     maxTurns = 10,
     temperature,
@@ -171,29 +151,32 @@ export async function run(
     onEvent,
     emitter,
     thread,
+    output: outputSchema,
+    maxOutputRetries = 2,
   } = options;
 
-  // ── Build initial message list ────────────────────────────────────────────
-  // System message always goes first (not stored in thread).
-  // If a thread is provided, replay its history before the new user message.
+  // When structured output is requested, append the JSON schema instruction
+  // to the system prompt so the model knows what shape to produce.
+  const systemContent = outputSchema
+    ? agent.instructions + outputSchema.systemPromptSuffix
+    : agent.instructions;
+
   const messages: Message[] = [
-    systemMessage(agent.instructions),
+    systemMessage(systemContent),
     ...(thread ? thread.getMessages() : []),
     userMessage(input),
   ];
 
   const toolMap = new Map(agent.tools.map((t) => [t.name, t]));
-
-  // Track how many messages existed before this run so we only save new ones
   const messageCountBefore = messages.length;
 
   let turns = 0;
   let finalOutput = "";
   const runStart = Date.now();
 
+  // ── Agent loop ────────────────────────────────────────────────────────────
   while (turns < maxTurns) {
     turns++;
-
     const llmStart = Date.now();
 
     dispatch(
@@ -276,6 +259,114 @@ export async function run(
     }
   }
 
+  // ── Structured output validation + retry loop ─────────────────────────────
+  let parsedOutput: z.infer<TSchema> | undefined;
+
+  if (outputSchema) {
+    let attempt = 0;
+    let lastError: z.ZodError | undefined;
+    let lastRaw = finalOutput;
+
+    while (attempt <= maxOutputRetries) {
+      attempt++;
+
+      const parsed = outputSchema.safeParse(lastRaw);
+
+      if (parsed.success) {
+        parsedOutput = parsed.data as z.infer<TSchema>;
+        dispatch(
+          {
+            type: "output-valid",
+            agentName: agent.name,
+            attempt,
+            output: parsedOutput,
+            timestamp: new Date().toISOString(),
+          },
+          onEvent,
+          emitter,
+        );
+        break;
+      }
+
+      // Validation failed
+      lastError = parsed.error;
+      const issues = (parsed.error?.issues ?? []).map((i) => ({
+        path: i.path.join(".") || "(root)",
+        message: i.message,
+      }));
+
+      dispatch(
+        {
+          type: "output-invalid",
+          agentName: agent.name,
+          attempt,
+          rawOutput: lastRaw,
+          issues,
+          timestamp: new Date().toISOString(),
+        },
+        onEvent,
+        emitter,
+      );
+
+      if (attempt > maxOutputRetries) break;
+
+      // Ask the model to fix its response
+      const errorSummary = issues
+        .map((i) => `  - ${i.path}: ${i.message}`)
+        .join("\n");
+
+      messages.push(
+        userMessage(
+          `Your response was not valid JSON matching the required schema.\n` +
+            `Validation errors:\n${errorSummary}\n\n` +
+            `Please respond again with a corrected JSON object only.`,
+        ),
+      );
+
+      const llmStart = Date.now();
+      dispatch(
+        {
+          type: "llm-call-start",
+          agentName: agent.name,
+          turn: turns + attempt,
+          messages: [...messages],
+          timestamp: new Date().toISOString(),
+        },
+        onEvent,
+        emitter,
+      );
+
+      const retryResult = await agent.model.generate({
+        messages,
+        temperature,
+        maxTokens,
+        signal,
+      });
+
+      dispatch(
+        {
+          type: "llm-call-end",
+          agentName: agent.name,
+          turn: turns + attempt,
+          result: retryResult,
+          durationMs: Date.now() - llmStart,
+          timestamp: new Date().toISOString(),
+        },
+        onEvent,
+        emitter,
+      );
+
+      lastRaw = retryResult.text;
+      finalOutput = retryResult.text;
+      messages.push(assistantTextMessage(retryResult.text));
+    }
+
+    // All retries exhausted without valid output
+    if (parsedOutput === undefined && lastError) {
+      throw new StructuredOutputError(lastRaw, lastError, attempt);
+    }
+  }
+
   dispatch(
     {
       type: "run-complete",
@@ -289,15 +380,14 @@ export async function run(
     emitter,
   );
 
-  // Save new messages back to thread (everything added during this run)
   if (thread) {
     thread.addMessages(messages.slice(messageCountBefore));
   }
 
-  return { finalOutput, messages, turns };
+  return { finalOutput, messages, turns, output: parsedOutput };
 }
 
-// ── executeTool() — internal helper ──────────────────────────────────────────
+// ── executeTool() ─────────────────────────────────────────────────────────────
 
 async function executeTool(
   tc: ToolCall,
@@ -349,16 +439,12 @@ async function executeTool(
     return error;
   }
 
-  // Parse and validate args with Zod
   let parsedArgs: unknown;
   try {
-    const raw = JSON.parse(tc.args);
-    parsedArgs = tool.parameters.parse(raw);
+    parsedArgs = tool.parameters.parse(JSON.parse(tc.args));
   } catch (err) {
     const error = {
-      error: `Invalid arguments for tool "${tc.toolName}": ${
-        err instanceof Error ? err.message : String(err)
-      }`,
+      error: `Invalid arguments for tool "${tc.toolName}": ${err instanceof Error ? err.message : String(err)}`,
     };
     dispatch(
       {
@@ -401,9 +487,7 @@ async function executeTool(
     emitter,
   );
 
-  if (signal?.aborted) {
-    throw new Error("Run aborted before tool execution.");
-  }
+  if (signal?.aborted) throw new Error("Run aborted before tool execution.");
 
   const start = Date.now();
   const result = await tool.execute(parsedArgs);
@@ -426,7 +510,7 @@ async function executeTool(
   return result;
 }
 
-// ── RunStreamEvent — what runStream() yields to the caller ───────────────────
+// ── RunStreamEvent ────────────────────────────────────────────────────────────
 
 export type RunStreamEvent =
   | { type: "text-delta"; delta: string }
@@ -485,7 +569,6 @@ export async function* runStream(
 
   while (turns < maxTurns) {
     turns++;
-
     const llmStart = Date.now();
 
     dispatch(
@@ -523,13 +606,11 @@ export async function* runStream(
             turnText += event.delta;
             yield { type: "text-delta", delta: event.delta };
             break;
-
           case "tool-call-delta": {
             const existing = partialTools.get(event.toolCallId);
             if (existing) existing.args += event.delta;
             break;
           }
-
           case "tool-call":
             partialTools.set(event.toolCallId, {
               toolName: event.toolName,
@@ -541,7 +622,6 @@ export async function* runStream(
               args: event.args,
             });
             break;
-
           case "finish":
             yield {
               type: "turn-finish",
@@ -552,7 +632,6 @@ export async function* runStream(
         }
       }
 
-      // Synthesise a GenerateResult for the llm-call-end event
       const syntheticResult: GenerateResult = {
         text: turnText,
         toolCalls: turnToolCalls,
@@ -571,7 +650,6 @@ export async function* runStream(
         emitter,
       );
     } else {
-      // Fallback: provider only has generate()
       const result = await agent.model.generate({
         messages,
         tools: agent.tools.length > 0 ? agent.tools : undefined,
@@ -579,7 +657,6 @@ export async function* runStream(
         maxTokens,
         signal,
       });
-
       if (result.text) {
         turnText = result.text;
         yield { type: "text-delta", delta: result.text };
@@ -590,7 +667,6 @@ export async function* runStream(
         turn: turns,
         finishReason: result.finishReason,
       };
-
       dispatch(
         {
           type: "llm-call-end",
@@ -686,7 +762,6 @@ export async function* runStream(
     emitter,
   );
 
-  // Save new messages back to thread
   if (thread) {
     thread.addMessages(messages.slice(messageCountBefore));
   }

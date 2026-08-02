@@ -13,6 +13,7 @@
     "example:test-providers": "node --env-file=.env dist/examples/test-providers.js",
     "example:stream": "node --env-file=.env dist/examples/streaming-chat.js",
     "example:memory": "node --env-file=.env dist/examples/memory-chat.js",
+    "example:structured": "node --env-file=.env dist/examples/structured-output.js",
     "clean": "rm -rf dist",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
