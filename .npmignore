@@ -1,0 +1,17 @@
+# Source — users get the compiled dist/ only
+src/
+examples/
+
+# Config
+tsconfig.json
+.env
+.env.*
+
+# Dev
+node_modules/
+.git/
+.gitignore
+
+# Internal docs
+PROJECT.md
+plan.md
