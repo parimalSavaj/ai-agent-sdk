@@ -13,16 +13,6 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/src/index.js",
-    "example:basic": "node --env-file=.env dist/examples/basic-agent.js",
-    "example:weather": "node --env-file=.env dist/examples/weather-agent.js",
-    "example:local": "node --env-file=.env dist/examples/local-model.js",
-    "example:test-providers": "node --env-file=.env dist/examples/test-providers.js",
-    "example:stream": "node --env-file=.env dist/examples/streaming-chat.js",
-    "example:memory": "node --env-file=.env dist/examples/memory-chat.js",
-    "example:structured": "node --env-file=.env dist/examples/structured-output.js",
-    "example:guardrails": "node --env-file=.env dist/examples/guardrails.js",
-    "example:handoffs": "node --env-file=.env dist/examples/handoffs.js",
-    "example:reliability": "node --env-file=.env dist/examples/reliability.js",
     "clean": "rm -rf dist"
   },
   "keywords": [
