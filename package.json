@@ -14,6 +14,8 @@
     "example:stream": "node --env-file=.env dist/examples/streaming-chat.js",
     "example:memory": "node --env-file=.env dist/examples/memory-chat.js",
     "example:structured": "node --env-file=.env dist/examples/structured-output.js",
+    "example:guardrails": "node --env-file=.env dist/examples/guardrails.js",
+    "example:handoffs": "node --env-file=.env dist/examples/handoffs.js",
     "clean": "rm -rf dist",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

@@ -4,18 +4,21 @@
  * Agent config type and the Agent class.
  *
  * Convention:
- *   - `AgentConfig` uses `type` — it is the plain input shape you pass to
- *     createAgent().
- *   - `Agent` is a class — it has a constructor that normalises the config
- *     (fills defaults) and exposes the resolved properties as readonly fields.
- *     The same Agent instance is safely reusable across concurrent runs
- *     because it holds zero mutable state.
+ *   - `AgentConfig` uses `type` — plain input shape passed to createAgent().
+ *   - `Agent` is a class — normalises config, fills defaults, exposes readonly
+ *     fields. Stateless so one instance is safely reusable across concurrent runs.
  */
 
 import type { ModelProvider } from "./provider.js";
 import type { Tool } from "./tool.js";
+import type {
+  InputGuardrail,
+  ToolGuardrail,
+  OutputGuardrail,
+} from "./guardrail.js";
+import type { Handoff } from "./handoff.js";
 
-// ── AgentConfig — what the caller passes in ───────────────────────────────────
+// ── AgentConfig ───────────────────────────────────────────────────────────────
 
 export type AgentConfig = {
   /** Human-readable name; used in logs and events */
@@ -32,6 +35,28 @@ export type AgentConfig = {
   model: ModelProvider;
   /** Tools available to this agent. Empty by default. */
   tools?: Tool[];
+  /**
+   * Handoffs this agent can perform — each one is surfaced to the model as
+   * a tool. When the model calls it, the runner switches to the target agent
+   * and continues the loop with the full conversation context transferred.
+   */
+  handoffs?: Handoff[];
+  /**
+   * Input guardrails — validated against the user's message before the first
+   * LLM call. Throw GuardrailError to block the run entirely.
+   */
+  inputGuardrails?: InputGuardrail[];
+  /**
+   * Tool guardrails — validated against each tool's parsed args before it
+   * executes. Blocked tools return a structured error to the model instead
+   * of running, allowing the model to self-correct or give a final answer.
+   */
+  toolGuardrails?: ToolGuardrail[];
+  /**
+   * Output guardrails — validated against the final model response before
+   * it is returned to the caller. Throw GuardrailError to block the result.
+   */
+  outputGuardrails?: OutputGuardrail[];
 };
 
 // ── Agent class ───────────────────────────────────────────────────────────────
@@ -41,18 +66,24 @@ export class Agent {
   readonly instructions: string;
   readonly model: ModelProvider;
   readonly tools: Tool[];
+  readonly handoffs: Handoff[];
+  readonly inputGuardrails: InputGuardrail[];
+  readonly toolGuardrails: ToolGuardrail[];
+  readonly outputGuardrails: OutputGuardrail[];
 
   constructor(config: AgentConfig) {
     this.name = config.name;
     this.instructions = config.instructions;
     this.model = config.model;
     this.tools = config.tools ?? [];
+    this.handoffs = config.handoffs ?? [];
+    this.inputGuardrails = config.inputGuardrails ?? [];
+    this.toolGuardrails = config.toolGuardrails ?? [];
+    this.outputGuardrails = config.outputGuardrails ?? [];
   }
 }
 
 // ── createAgent() ─────────────────────────────────────────────────────────────
-// Factory function — matches the public API in the plan and keeps call sites
-// clean (no `new` keyword needed at the consumer level).
 
 /**
  * Create a reusable agent definition from a config object.
@@ -63,6 +94,9 @@ export class Agent {
  *   name: "Support Agent",
  *   instructions: "You are a helpful assistant.",
  *   model: model("openai/gpt-4o-mini"),
+ *   inputGuardrails: [noEmptyInput],
+ *   toolGuardrails: [safeDelete],
+ *   outputGuardrails: [noSecrets],
  * });
  * ```
  */

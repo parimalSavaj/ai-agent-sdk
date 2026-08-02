@@ -21,6 +21,8 @@ export {
   OutputSchema,
   StructuredOutputError,
 } from "./core/output.js";
+export { defineGuardrail, GuardrailError } from "./core/guardrail.js";
+export { defineHandoff, HandoffError } from "./core/handoff.js";
 
 // ── Types — agent ─────────────────────────────────────────────────────────────
 export type { Agent, AgentConfig } from "./core/agent.js";
@@ -80,3 +82,16 @@ export type { KnownProvider, ModelSpec } from "./core/model.js";
 // ── Types — thread ────────────────────────────────────────────────────────────
 export type { ThreadStore } from "./core/thread.js";
 export { Thread } from "./core/thread.js";
+
+// ── Types — guardrails ────────────────────────────────────────────────────────
+export type {
+  Guardrail,
+  GuardrailType,
+  GuardrailResult,
+  InputGuardrail,
+  ToolGuardrail,
+  OutputGuardrail,
+} from "./core/guardrail.js";
+
+// ── Types — handoffs ──────────────────────────────────────────────────────────
+export type { Handoff, HandoffRecord } from "./core/handoff.js";

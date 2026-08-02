@@ -29,6 +29,22 @@ import type { Thread } from "./thread.js";
 import type { OutputSchema } from "./output.js";
 import { StructuredOutputError } from "./output.js";
 import { z, type ZodTypeAny } from "zod";
+import type {
+  InputGuardrail,
+  ToolGuardrail,
+  OutputGuardrail,
+} from "./guardrail.js";
+import {
+  checkInputGuardrails,
+  checkToolGuardrails,
+  checkOutputGuardrails,
+} from "./guardrail.js";
+import type { Handoff, HandoffRecord } from "./handoff.js";
+import {
+  HANDOFF_TOOL_PREFIX,
+  isHandoffToolCall,
+  HandoffError,
+} from "./handoff.js";
 
 // ── RunOptions ────────────────────────────────────────────────────────────────
 
@@ -42,6 +58,11 @@ export type RunOptions<TSchema extends ZodTypeAny = ZodTypeAny> = {
   emitter?: AgentEventEmitter;
   output?: OutputSchema<TSchema>;
   maxOutputRetries?: number;
+  /**
+   * Maximum number of agent-to-agent handoffs allowed in a single run.
+   * Prevents infinite delegation loops. Default: 3
+   */
+  maxHandoffs?: number;
 };
 
 // ── RunEvent ──────────────────────────────────────────────────────────────────
@@ -104,6 +125,34 @@ export type RunEvent =
       turns: number;
       totalDurationMs: number;
       timestamp: string;
+    }
+  | {
+      /** Fired whenever a guardrail blocks input, a tool call, or output */
+      type: "guardrail-triggered";
+      agentName: string;
+      guardrailName: string;
+      guardrailType: "input" | "tool" | "output";
+      /** The value that was blocked (input string, tool args, or output string) */
+      blockedValue: unknown;
+      reason: string;
+      timestamp: string;
+    }
+  | {
+      /** Fired just before control transfers to a new agent */
+      type: "handoff-start";
+      fromAgent: string;
+      toAgent: string;
+      context: string;
+      handoffCount: number;
+      timestamp: string;
+    }
+  | {
+      /** Fired after the target agent completes its work */
+      type: "handoff-complete";
+      fromAgent: string;
+      toAgent: string;
+      finalOutput: string;
+      timestamp: string;
     };
 
 // ── RunResult ─────────────────────────────────────────────────────────────────
@@ -114,6 +163,8 @@ export type RunResult<TOutput = unknown> = {
   turns: number;
   /** Typed structured output — present when options.output validation succeeded */
   output?: TOutput;
+  /** All handoffs that occurred during this run, in order */
+  handoffs: HandoffRecord[];
 };
 
 // ── Internal helper ───────────────────────────────────────────────────────────
@@ -153,6 +204,7 @@ export async function run<TSchema extends ZodTypeAny = ZodTypeAny>(
     thread,
     output: outputSchema,
     maxOutputRetries = 2,
+    maxHandoffs = 3,
   } = options;
 
   // When structured output is requested, append the JSON schema instruction
@@ -167,22 +219,67 @@ export async function run<TSchema extends ZodTypeAny = ZodTypeAny>(
     userMessage(input),
   ];
 
-  const toolMap = new Map(agent.tools.map((t) => [t.name, t]));
+  // Build combined tool map: regular tools + handoff stub tools
+  // Handoff tools are detected by HANDOFF_TOOL_PREFIX before executeTool() runs.
+  const allTools = [...agent.tools, ...agent.handoffs.map((h) => h.tool)];
+  const toolMap = new Map(allTools.map((t) => [t.name, t]));
   const messageCountBefore = messages.length;
+
+  // Handoff tracking
+  const handoffRecords: HandoffRecord[] = [];
+  let handoffCount = 0;
+  const visitedAgents = new Set<string>([agent.name]);
+
+  // active agent — may change during handoffs
+  let activeAgent = agent;
 
   let turns = 0;
   let finalOutput = "";
   const runStart = Date.now();
+
+  // ── Input guardrails ──────────────────────────────────────────────────────
+  // Run before the first LLM call. GuardrailError thrown here propagates
+  // directly to the caller — the LLM is never contacted.
+  if (agent.inputGuardrails.length > 0) {
+    try {
+      await checkInputGuardrails(agent.inputGuardrails, input);
+    } catch (err) {
+      if (err instanceof Error && err.name === "GuardrailError") {
+        const ge = err as import("./guardrail.js").GuardrailError;
+        dispatch(
+          {
+            type: "guardrail-triggered",
+            agentName: agent.name,
+            guardrailName: ge.guardrailName,
+            guardrailType: "input",
+            blockedValue: input,
+            reason: ge.reason,
+            timestamp: new Date().toISOString(),
+          },
+          onEvent,
+          emitter,
+        );
+      }
+      throw err;
+    }
+  }
 
   // ── Agent loop ────────────────────────────────────────────────────────────
   while (turns < maxTurns) {
     turns++;
     const llmStart = Date.now();
 
+    // Rebuild tool map when activeAgent changes (after a handoff)
+    const activeAllTools = [
+      ...activeAgent.tools,
+      ...activeAgent.handoffs.map((h) => h.tool),
+    ];
+    const activeToolMap = new Map(activeAllTools.map((t) => [t.name, t]));
+
     dispatch(
       {
         type: "llm-call-start",
-        agentName: agent.name,
+        agentName: activeAgent.name,
         turn: turns,
         messages: [...messages],
         timestamp: new Date().toISOString(),
@@ -191,9 +288,9 @@ export async function run<TSchema extends ZodTypeAny = ZodTypeAny>(
       emitter,
     );
 
-    const result = await agent.model.generate({
+    const result = await activeAgent.model.generate({
       messages,
-      tools: agent.tools.length > 0 ? agent.tools : undefined,
+      tools: activeAllTools.length > 0 ? activeAllTools : undefined,
       temperature,
       maxTokens,
       signal,
@@ -202,7 +299,7 @@ export async function run<TSchema extends ZodTypeAny = ZodTypeAny>(
     dispatch(
       {
         type: "llm-call-end",
-        agentName: agent.name,
+        agentName: activeAgent.name,
         turn: turns,
         result,
         durationMs: Date.now() - llmStart,
@@ -219,7 +316,7 @@ export async function run<TSchema extends ZodTypeAny = ZodTypeAny>(
       break;
     }
 
-    // Tool calls → append assistant turn, execute, loop
+    // Tool calls → separate handoffs from regular tool calls
     messages.push(
       assistantToolCallMessage(
         result.toolCalls.map(
@@ -234,15 +331,115 @@ export async function run<TSchema extends ZodTypeAny = ZodTypeAny>(
       ),
     );
 
+    let didHandoff = false;
+
     for (const tc of result.toolCalls) {
+      // ── Handoff detection ────────────────────────────────────────────────
+      if (isHandoffToolCall(tc.toolName)) {
+        // Find the handoff definition on the active agent
+        const handoff = activeAgent.handoffs.find(
+          (h) => h.toolName === tc.toolName,
+        );
+
+        if (!handoff) {
+          // Shouldn't happen, but handle gracefully
+          messages.push(
+            toolResultMessage(
+              tc.toolCallId,
+              tc.toolName,
+              JSON.stringify({
+                error: `Handoff tool "${tc.toolName}" not found on agent "${activeAgent.name}"`,
+              }),
+            ),
+          );
+          continue;
+        }
+
+        // Parse the context arg the model passed
+        let context = "";
+        try {
+          const args = JSON.parse(tc.args) as { context?: string };
+          context = args.context ?? "";
+        } catch {
+          context = tc.args;
+        }
+
+        // ── Loop prevention ──────────────────────────────────────────────
+        handoffCount++;
+        if (handoffCount > maxHandoffs) {
+          throw new HandoffError(
+            activeAgent.name,
+            handoff.targetAgent.name,
+            handoffCount,
+          );
+        }
+
+        dispatch(
+          {
+            type: "handoff-start",
+            fromAgent: activeAgent.name,
+            toAgent: handoff.targetAgent.name,
+            context,
+            handoffCount,
+            timestamp: new Date().toISOString(),
+          },
+          onEvent,
+          emitter,
+        );
+
+        // Acknowledge the handoff tool call so the message history is valid
+        messages.push(
+          toolResultMessage(
+            tc.toolCallId,
+            tc.toolName,
+            JSON.stringify({
+              handoff: "initiated",
+              to: handoff.targetAgent.name,
+            }),
+          ),
+        );
+
+        // Record the handoff
+        const record: HandoffRecord = {
+          fromAgent: activeAgent.name,
+          toAgent: handoff.targetAgent.name,
+          context,
+          timestamp: new Date().toISOString(),
+        };
+        handoffRecords.push(record);
+
+        // Switch active agent — the loop continues with the new agent
+        // The full message history carries forward (context preserved)
+        activeAgent = handoff.targetAgent;
+        visitedAgents.add(activeAgent.name);
+
+        dispatch(
+          {
+            type: "handoff-complete",
+            fromAgent: record.fromAgent,
+            toAgent: record.toAgent,
+            finalOutput: "",
+            timestamp: new Date().toISOString(),
+          },
+          onEvent,
+          emitter,
+        );
+
+        didHandoff = true;
+        // Only one handoff per turn — skip remaining tool calls in this batch
+        break;
+      }
+
+      // ── Regular tool call ────────────────────────────────────────────────
       const toolResult = await executeTool(
         tc,
-        toolMap,
+        activeToolMap,
         turns,
-        agent.name,
+        activeAgent.name,
         onEvent,
         emitter,
         signal,
+        activeAgent.toolGuardrails,
       );
       messages.push(
         toolResultMessage(
@@ -253,7 +450,9 @@ export async function run<TSchema extends ZodTypeAny = ZodTypeAny>(
       );
     }
 
-    if (turns >= maxTurns) {
+    // After a handoff we continue the loop — the new agent will respond
+    // to the accumulated messages on the next iteration.
+    if (!didHandoff && turns >= maxTurns) {
       finalOutput = result.text;
       break;
     }
@@ -367,10 +566,35 @@ export async function run<TSchema extends ZodTypeAny = ZodTypeAny>(
     }
   }
 
+  // ── Output guardrails ─────────────────────────────────────────────────────
+  if (activeAgent.outputGuardrails.length > 0) {
+    try {
+      await checkOutputGuardrails(activeAgent.outputGuardrails, finalOutput);
+    } catch (err) {
+      if (err instanceof Error && err.name === "GuardrailError") {
+        const ge = err as import("./guardrail.js").GuardrailError;
+        dispatch(
+          {
+            type: "guardrail-triggered",
+            agentName: activeAgent.name,
+            guardrailName: ge.guardrailName,
+            guardrailType: "output",
+            blockedValue: finalOutput,
+            reason: ge.reason,
+            timestamp: new Date().toISOString(),
+          },
+          onEvent,
+          emitter,
+        );
+      }
+      throw err;
+    }
+  }
+
   dispatch(
     {
       type: "run-complete",
-      agentName: agent.name,
+      agentName: activeAgent.name,
       finalOutput,
       turns,
       totalDurationMs: Date.now() - runStart,
@@ -384,7 +608,13 @@ export async function run<TSchema extends ZodTypeAny = ZodTypeAny>(
     thread.addMessages(messages.slice(messageCountBefore));
   }
 
-  return { finalOutput, messages, turns, output: parsedOutput };
+  return {
+    finalOutput,
+    messages,
+    turns,
+    output: parsedOutput,
+    handoffs: handoffRecords,
+  };
 }
 
 // ── executeTool() ─────────────────────────────────────────────────────────────
@@ -404,6 +634,7 @@ async function executeTool(
   onEvent: RunOptions["onEvent"],
   emitter: RunOptions["emitter"],
   signal?: AbortSignal,
+  toolGuardrails: ToolGuardrail[] = [],
 ): Promise<unknown> {
   const tool = toolMap.get(tc.toolName);
 
@@ -486,6 +717,47 @@ async function executeTool(
     onEvent,
     emitter,
   );
+
+  // ── Tool guardrails ────────────────────────────────────────────────────────
+  // Check after arg parsing but before execution. On block, return a structured
+  // error to the model — does not throw, lets the model self-correct.
+  const guardrailErr = await checkToolGuardrails(
+    toolGuardrails,
+    tc.toolName,
+    parsedArgs,
+  );
+  if (guardrailErr) {
+    dispatch(
+      {
+        type: "guardrail-triggered",
+        agentName,
+        guardrailName: guardrailErr.guardrailName,
+        guardrailType: "tool",
+        blockedValue: parsedArgs,
+        reason: guardrailErr.reason,
+        timestamp: new Date().toISOString(),
+      },
+      onEvent,
+      emitter,
+    );
+    const blockedResult = {
+      error: `Tool "${tc.toolName}" blocked by guardrail "${guardrailErr.guardrailName}": ${guardrailErr.reason}`,
+    };
+    dispatch(
+      {
+        type: "tool-call-end",
+        agentName,
+        turn,
+        toolName: tc.toolName,
+        result: blockedResult,
+        durationMs: 0,
+        timestamp: new Date().toISOString(),
+      },
+      onEvent,
+      emitter,
+    );
+    return blockedResult;
+  }
 
   if (signal?.aborted) throw new Error("Run aborted before tool execution.");
 
@@ -724,6 +996,7 @@ export async function* runStream(
         onEvent,
         emitter,
         signal,
+        agent.toolGuardrails,
       );
 
       yield {
