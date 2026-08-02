@@ -7,26 +7,27 @@
 
 ## Current Status
 
-| # | Feature | Status | Marks |
-|---|---|---|---|
-| 1 | Agent Runtime | ✅ Done | 15 |
-| 2 | Tools | ✅ Done | 10 |
-| 3 | Memory & Sessions | ✅ Done | 10 |
-| 4 | Streaming & Events | ✅ Done | 10 |
-| 5 | Model Providers | ✅ Done | — |
-| 6 | Tracing | ✅ Done | 5 |
-| 7 | Structured Output | ❌ Missing | 10 |
-| 8 | Guardrails | ❌ Missing | 10 |
-| 9 | Handoffs | ❌ Missing | 10 |
-| 10 | Reliability | ⚠️ Partial | 10 |
-| 11 | Documentation | ❌ Missing | 10 |
-| 12 | SDK Name | ❌ Missing | — |
+| #   | Feature            | Status  | Marks |
+| --- | ------------------ | ------- | ----- |
+| 1   | Agent Runtime      | ✅ Done | 15    |
+| 2   | Tools              | ✅ Done | 10    |
+| 3   | Memory & Sessions  | ✅ Done | 10    |
+| 4   | Streaming & Events | ✅ Done | 10    |
+| 5   | Model Providers    | ✅ Done | —     |
+| 6   | Tracing            | ✅ Done | 5     |
+| 7   | Structured Output  | ✅ Done | 10    |
+| 8   | Guardrails         | ✅ Done | 10    |
+| 9   | Handoffs           | ✅ Done | 10    |
+| 10  | Reliability        | ✅ Done | 10    |
+| 11  | SDK Name           | ✅ Done | —     |
+| 12  | Documentation      | ✅ Done | 10    |
 
 ---
 
 ## What Is Already Built
 
 ### Agent Runtime ✅
+
 - `createAgent(config)` — stateless agent definition
 - `run(agent, input, options)` — full multi-turn loop
 - `runStream(agent, input, options)` — streaming version
@@ -34,6 +35,7 @@
 - `maxTurns` safety limit
 
 ### Tools ✅
+
 - `defineTool({ name, description, parameters, execute })`
 - Zod schema → JSON schema conversion (Zod v4 compatible)
 - Runtime argument validation via `parameters.parse()`
@@ -41,6 +43,7 @@
 - Unknown tool / bad args → structured error returned to model (self-corrects)
 
 ### Memory & Sessions ✅
+
 - `Thread` class — holds message history, auto-generated id
 - `ThreadStore` interface — swappable storage backend
 - `InMemoryThreadStore` — default in-process implementation
@@ -49,6 +52,7 @@
 - Multiple concurrent independent threads
 
 ### Streaming & Events ✅
+
 - `runStream()` — `AsyncGenerator<RunStreamEvent>`
 - `RunStreamEvent` union: `text-delta`, `tool-call-start`, `tool-call-end`, `turn-finish`, `finish`
 - `AgentEventEmitter` class — typed `on/off/onAny/emit/clear`
@@ -56,6 +60,7 @@
 - `onEvent` inline callback + `emitter` subscription — both compose
 
 ### Model Providers ✅
+
 - `ModelProvider` interface — the core/vendor firewall
 - `model("provider/modelId", options?)` — lazy registry, single entry point
 - `registerProvider(name, factory)` — custom provider registration
@@ -63,12 +68,14 @@
 - Fallback to `generate()` when provider has no `stream()`
 
 ### Tracing ✅
+
 - Every `RunEvent` carries: `agentName`, `turn`, `timestamp`, `durationMs`
 - `run-complete` carries `totalDurationMs`
 - `llm-call-end` carries full `GenerateResult` including `usage` (token counts)
 - All events observable via `onEvent` or `AgentEventEmitter`
 
 ### Reliability (partial) ⚠️
+
 - ✅ `maxTurns` loop prevention
 - ✅ `AbortSignal` cancellation support
 - ✅ Unknown tool / invalid args → structured error (no crash)
@@ -88,20 +95,24 @@
 The runner validates the output, retries if invalid, and infers TypeScript types.
 
 **Files to create/change:**
+
 - `src/core/output.ts` — new: `defineOutput()`, validation logic
 - `src/core/runner.ts` — extend `RunOptions` with `outputSchema`, add validation + retry loop
 - `src/index.ts` — export `defineOutput`
 
 **API design:**
+
 ```ts
 import { z } from "zod";
-import { createAgent, run, defineOutput } from "ai-agent-sdk";
+import { createAgent, run, defineOutput } from "sugam";
 
-const SentimentSchema = defineOutput(z.object({
-  sentiment: z.enum(["positive", "negative", "neutral"]),
-  confidence: z.number().min(0).max(1),
-  summary: z.string(),
-}));
+const SentimentSchema = defineOutput(
+  z.object({
+    sentiment: z.enum(["positive", "negative", "neutral"]),
+    confidence: z.number().min(0).max(1),
+    summary: z.string(),
+  }),
+);
 
 const result = await run(agent, "Analyse this review: ...", {
   output: SentimentSchema,
@@ -112,6 +123,7 @@ console.log(result.output.sentiment);
 ```
 
 **Implementation steps:**
+
 1. `defineOutput(schema)` — wraps a Zod schema, adds a system prompt suffix
    instructing the model to respond with valid JSON matching the schema
 2. Runner detects `outputSchema` in options → appends JSON instruction to system message
@@ -128,14 +140,16 @@ console.log(result.output.sentiment);
 before a tool executes, and before output is returned.
 
 **Files to create/change:**
+
 - `src/core/guardrail.ts` — new: `Guardrail` type, `defineGuardrail()`
 - `src/core/agent.ts` — add `inputGuardrails`, `outputGuardrails`, `toolGuardrails` to `AgentConfig`
 - `src/core/runner.ts` — check guardrails at the right points in the loop
 - `src/index.ts` — export guardrail types
 
 **API design:**
+
 ```ts
-import { defineGuardrail, createAgent } from "ai-agent-sdk";
+import { defineGuardrail, createAgent } from "sugam";
 
 // Input guardrail — runs before the model is called
 const noProfanity = defineGuardrail({
@@ -185,6 +199,7 @@ const agent = createAgent({
 ```
 
 **Implementation steps:**
+
 1. `defineGuardrail()` — typed config object with `validate()` returning `{ blocked, reason }`
 2. Runner checks input guardrails before the first LLM call — throws `GuardrailError` if blocked
 3. `executeTool()` checks tool guardrails before running — returns structured error to model if blocked
@@ -199,13 +214,15 @@ const agent = createAgent({
 with loop prevention and trace visibility.
 
 **Files to create/change:**
+
 - `src/core/handoff.ts` — new: `Handoff` type, `defineHandoff()`
 - `src/core/runner.ts` — detect handoff tool calls, execute handoff, prevent loops
 - `src/index.ts` — export handoff types
 
 **API design:**
+
 ```ts
-import { createAgent, defineHandoff, run, model } from "ai-agent-sdk";
+import { createAgent, defineHandoff, run, model } from "sugam";
 
 const billingAgent = createAgent({
   name: "Billing Agent",
@@ -221,7 +238,8 @@ const handoffToBilling = defineHandoff({
 
 const triageAgent = createAgent({
   name: "Triage Agent",
-  instructions: "Triage customer requests. Hand off to specialists when needed.",
+  instructions:
+    "Triage customer requests. Hand off to specialists when needed.",
   model: model("openrouter/openai/gpt-4o-mini"),
   handoffs: [handoffToBilling],
 });
@@ -232,6 +250,7 @@ console.log(result.handoffs); // list of handoffs that occurred
 ```
 
 **Implementation steps:**
+
 1. `defineHandoff(config)` — wraps a target agent, generates a `Tool` the model can call
 2. Handoffs are registered as special tools on the agent — model calls them like any tool
 3. Runner detects a handoff tool call → switches active agent → continues loop with new agent
@@ -247,10 +266,12 @@ console.log(result.handoffs); // list of handoffs that occurred
 **Goal:** Add retries, per-call timeouts, and model fallback.
 
 **Files to change:**
+
 - `src/core/runner.ts` — wrap `generate()` calls with retry + timeout logic
 - `src/core/agent.ts` — add `fallbackModel` to `AgentConfig`
 
 **API design:**
+
 ```ts
 const agent = createAgent({
   name: "Reliable Agent",
@@ -260,13 +281,14 @@ const agent = createAgent({
 });
 
 const result = await run(agent, "Hello", {
-  maxRetries: 3,        // retry failed LLM calls up to 3 times
-  retryDelay: 1000,     // ms between retries (doubles each attempt)
-  callTimeout: 30000,   // ms timeout per individual LLM call
+  maxRetries: 3, // retry failed LLM calls up to 3 times
+  retryDelay: 1000, // ms between retries (doubles each attempt)
+  callTimeout: 30000, // ms timeout per individual LLM call
 });
 ```
 
 **Implementation steps:**
+
 1. Wrap `agent.model.generate()` in a `callWithRetry()` helper — catches errors, waits `retryDelay * 2^attempt`, retries
 2. `callTimeout` — race `generate()` against a `setTimeout` that rejects with `TimeoutError`
 3. `fallbackModel` — if all retries on primary fail, attempt once on fallback model
@@ -279,7 +301,8 @@ const result = await run(agent, "Hello", {
 **Goal:** Give the SDK an original name, update `package.json` and all imports.
 
 **Steps:**
-1. Pick a name (e.g. `agentix`, `kira-sdk`, `flowagent` — your choice)
+
+1. Pick a name (e.g. `sugam`, `kira-sdk`, `flowagent` — your choice)
 2. Update `package.json` `name` field
 3. Update `README.md` install instructions
 4. No source file changes needed — internal imports use relative paths
@@ -291,6 +314,7 @@ const result = await run(agent, "Hello", {
 **Goal:** Hosted docs a developer can use without reading source code.
 
 **Sections to cover:**
+
 - Installation & quick start
 - `createAgent` API reference
 - `defineTool` + Zod schemas
@@ -346,11 +370,11 @@ examples/
 
 ## Implementation Order
 
-| Phase | Feature | Why this order |
-|---|---|---|
-| 7 | Structured Output | Self-contained, builds on existing Zod work |
-| 8 | Guardrails | Additive to runner, no new dependencies |
-| 9 | Handoffs | Builds on runner + tool system |
-| 10 | Reliability | Wraps existing generate() calls |
-| 11 | SDK Name | Rename before publishing |
-| 12 | Documentation | After all features stable |
+| Phase | Feature           | Why this order                              |
+| ----- | ----------------- | ------------------------------------------- |
+| 7     | Structured Output | Self-contained, builds on existing Zod work |
+| 8     | Guardrails        | Additive to runner, no new dependencies     |
+| 9     | Handoffs          | Builds on runner + tool system              |
+| 10    | Reliability       | Wraps existing generate() calls             |
+| 11    | SDK Name          | Rename before publishing                    |
+| 12    | Documentation     | After all features stable                   |

@@ -1,5 +1,5 @@
 /**
- * index.ts — public API surface of ai-agent-sdk
+ * index.ts — public API surface of sugam
  *
  * Only the symbols explicitly exported here are part of the public contract.
  * Internal implementation details stay private.

@@ -1,12 +1,18 @@
 {
-  "name": "ai-agent-sdk",
+  "name": "sugam",
   "version": "1.0.0",
-  "description": "",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "description": "A TypeScript AI agent SDK — tools, memory, streaming, guardrails, handoffs, and multi-provider support.",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/src/index.js",
+      "types": "./dist/src/index.d.ts"
+    }
+  },
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
+    "start": "node dist/src/index.js",
     "example:basic": "node --env-file=.env dist/examples/basic-agent.js",
     "example:weather": "node --env-file=.env dist/examples/weather-agent.js",
     "example:local": "node --env-file=.env dist/examples/local-model.js",
@@ -17,12 +23,21 @@
     "example:guardrails": "node --env-file=.env dist/examples/guardrails.js",
     "example:handoffs": "node --env-file=.env dist/examples/handoffs.js",
     "example:reliability": "node --env-file=.env dist/examples/reliability.js",
-    "clean": "rm -rf dist",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "clean": "rm -rf dist"
   },
-  "keywords": [],
+  "keywords": [
+    "ai",
+    "agent",
+    "sdk",
+    "llm",
+    "openai",
+    "anthropic",
+    "tools",
+    "streaming",
+    "typescript"
+  ],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "module",
   "devDependencies": {
     "@types/node": "^26.1.2",
