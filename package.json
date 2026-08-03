@@ -1,6 +1,6 @@
 {
   "name": "@savaj/sugam",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A TypeScript AI agent SDK — tools, memory, streaming, guardrails, handoffs, and multi-provider support.",
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
