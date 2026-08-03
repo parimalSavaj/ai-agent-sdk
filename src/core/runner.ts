@@ -243,17 +243,20 @@ export async function run<TSchema extends ZodTypeAny = ZodTypeAny>(
     ? agent.instructions + outputSchema.systemPromptSuffix
     : agent.instructions;
 
+  const userMsg = userMessage(input);
   const messages: Message[] = [
     systemMessage(systemContent),
     ...(thread ? thread.getMessages() : []),
-    userMessage(input),
+    userMsg,
   ];
 
   // Build combined tool map: regular tools + handoff stub tools
   // Handoff tools are detected by HANDOFF_TOOL_PREFIX before executeTool() runs.
   const allTools = [...agent.tools, ...agent.handoffs.map((h) => h.tool)];
   const toolMap = new Map(allTools.map((t) => [t.name, t]));
-  const messageCountBefore = messages.length;
+  // messageCountBefore is set BEFORE user message so the user message is also
+  // persisted to the thread at the end of the run.
+  const messageCountBefore = messages.length - 1;
 
   // Handoff tracking
   const handoffRecords: HandoffRecord[] = [];
@@ -820,7 +823,29 @@ async function executeTool(
   if (signal?.aborted) throw new Error("Run aborted before tool execution.");
 
   const start = Date.now();
-  const result = await tool.execute(parsedArgs);
+  let result: unknown;
+  try {
+    result = await tool.execute(parsedArgs);
+  } catch (err) {
+    const durationMs = Date.now() - start;
+    const errorResult = {
+      error: `Tool "${tc.toolName}" threw an error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+    dispatch(
+      {
+        type: "tool-call-end",
+        agentName,
+        turn,
+        toolName: tc.toolName,
+        result: errorResult,
+        durationMs,
+        timestamp: new Date().toISOString(),
+      },
+      onEvent,
+      emitter,
+    );
+    return errorResult;
+  }
   const durationMs = Date.now() - start;
 
   dispatch(
